@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>Network Demo</title>
+    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <style>
+        body { margin: 0; font-family: 'Segoe UI', sans-serif; display: flex; height: 100vh; overflow: hidden; }
+        
+        #mynetwork {
+            flex-grow: 1;
+            background-color: #f8f9fa;
+        }
+
+        #sidebar {
+            width: 340px;
+            padding: 20px;
+            background: #ffffff;
+            border-right: 1px solid #ddd;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 2px 0 10px rgba(0,0,0,0.05);
+            z-index: 10;
+        }
+
+        h2 { margin-top: 0; color: #2c3e50; font-size: 1.4rem; margin-bottom: 5px; }
+        .subtitle { font-size: 0.85rem; color: #777; margin-bottom: 15px; }
+
+        label { font-weight: bold; font-size: 0.85rem; color: #555; margin-top: 10px; display: block; }
+        select { width: 100%; padding: 6px; margin-top: 5px; border: 1px solid #ccc; border-radius: 4px; }
+        
+        button {
+            margin-top: 10px; padding: 8px; width: 100%;
+            background-color: #007bff; color: white;
+            border: none; border-radius: 4px; cursor: pointer;
+            transition: background 0.2s;
+        }
+        button:hover { background-color: #0056b3; }
+        button.reset { background-color: #6c757d; margin-top: 5px; }
+        button.reset:hover { background-color: #5a6268; }
+
+        .table-container {
+            margin-top: 20px;
+            border: 1px solid #eee;
+            border-radius: 6px;
+            overflow: hidden;
+        }
+        
+        .table-header {
+            background: #f1f3f5; padding: 8px; font-weight: bold; font-size: 0.85rem;
+            border-bottom: 1px solid #ddd; display: flex; justify-content: space-between;
+        }
+
+        .scroll-box {
+            max-height: 250px; overflow-y: auto; background: #fff;
+        }
+
+        table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+        th, td { padding: 6px 10px; text-align: left; border-bottom: 1px solid #f0f0f0; }
+        
+        /* Active Row Highlighting */
+        tr.clickable:hover { background-color: #e3f2fd; cursor: pointer; }
+        tr.selected-row { background-color: #cce5ff; border-left: 4px solid #007bff; }
+
+        .rank { color: #999; font-size: 0.8em; width: 20px; display: inline-block; }
+        .count-badge { background: #eee; padding: 2px 6px; border-radius: 10px; font-size: 0.75rem; font-weight: bold; float: right; }
+
+        .stat-box { margin-top: auto; padding: 10px; background: #e9ecef; border-radius: 6px; font-size: 0.85rem; }
+        
+        .legend { margin-top: 10px; padding-top: 10px; border-top: 1px solid #eee; display: flex; gap: 10px; font-size: 0.8rem;}
+        .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 4px; }
+    </style>
+</head>
+<body>
+
+    <div id="sidebar">
+        <h2>📊 Graph Analytics</h2>
+        <div class="subtitle">Select a row to Center & Focus the graph.</div>
+
+        <label>1. Type:</label>
+        <select id="typeSelect" onchange="populateNodes()">
+            <option value="all">-- All Types --</option>
+            <option value="student">Students</option>
+            <option value="course">Courses</option>
+            <option value="teacher">Teachers</option>
+        </select>
+
+        <label>2. Entity:</label>
+        <select id="nodeSelect" disabled><option value="">-- Select node --</option></select>
+
+        <button onclick="applyFilter()" id="btnIsolate">🔎 Isolate & Focus</button>
+        <button onclick="resetFilter()" class="reset">↺ Reset View</button>
+
+        <div class="table-container">
+            <div class="table-header">
+                <span>Top Connectors</span>
+                <span>Links</span>
+            </div>
+            <div class="scroll-box">
+                <table id="degreeTable"></table>
+            </div>
+        </div>
+
+        <div class="stat-box">Visible Nodes: <strong id="visibleCount">0</strong></div>
+
+        <div class="legend">
+            <div><span class="dot" style="background:#ff6b6b"></span>Teacher</div>
+            <div><span class="dot" style="background:#4ecdc4"></span>Course</div>
+            <div><span class="dot" style="background:#ffd93d"></span>Student</div>
+        </div>
+    </div>
+
+    <div id="mynetwork"></div>
+
+    <script type="text/javascript">
+        // --- 1. DATA GENERATION ---
+        const rawNodes = [];
+        const rawEdges = [];
+
+        const teachers = ["Mr. Usta", "Prof. Turing", "Dr. Hopper", "Prof. Feynman", "Dr. Wagner", "Prof. Newton"];
+        teachers.forEach((name, i) => {
+            rawNodes.push({ id: `t${i}`, label: name, group: 'teacher', title: "Teacher" });
+        });
+
+        const courses = ["CS101", "CS202", "MATH101", "PHYS101", "CHEM101", "BIO101", "ECON101", "HIST101"];
+        courses.forEach((code, i) => {
+            rawNodes.push({ id: `c${i}`, label: code, group: 'course', title: "Course" });
+            const teacherIndex = i % teachers.length; 
+            rawEdges.push({ from: `t${teacherIndex}`, to: `c${i}`, label: "TEACHES" });
+        });
+
+        for (let i = 1; i <= 75; i++) {
+            const sid = `s${i}`;
+            rawNodes.push({ id: sid, label: `S${i}`, group: 'student', title: `Student ${i}` });
+            const numCourses = Math.floor(Math.random() * 2) + 1; 
+            const shuffled = [...Array(8).keys()].sort(() => 0.5 - Math.random()).slice(0, numCourses);
+            shuffled.forEach(cIndex => {
+                rawEdges.push({ from: sid, to: `c${cIndex}`, color: { color: '#ccc', opacity: 0.5 } });
+            });
+        }
+
+        // --- 2. INIT VIS.JS ---
+        const nodes = new vis.DataSet(rawNodes);
+        const edges = new vis.DataSet(rawEdges);
+        const container = document.getElementById('mynetwork');
+        const data = { nodes: nodes, edges: edges };
+        const options = {
+            nodes: { shape: 'dot', font: { size: 14 } },
+            groups: {
+                teacher: { color: '#ff6b6b', size: 25 },
+                course:  { color: '#4ecdc4', size: 20 },
+                student: { color: '#ffd93d', size: 10 }
+            },
+            physics: { stabilization: false, barnesHut: { gravitationalConstant: -4000 } },
+            interaction: { hover: true }
+        };
+
+        const network = new vis.Network(container, data, options);
+        document.getElementById('visibleCount').innerText = nodes.length;
+
+        // --- 3. DEGREE TABLE ---
+        function initDegreeTable() {
+            const nodeStats = rawNodes.map(node => {
+                const degree = rawEdges.filter(e => e.from === node.id || e.to === node.id).length;
+                return { ...node, degree };
+            });
+            nodeStats.sort((a, b) => b.degree - a.degree);
+
+            const tableBody = document.getElementById('degreeTable');
+            let html = "";
+            nodeStats.forEach((n, index) => {
+                let color = '#ccc';
+                if(n.group === 'teacher') color = '#ff6b6b';
+                if(n.group === 'course') color = '#4ecdc4';
+                if(n.group === 'student') color = '#ffd93d';
+
+                html += `
+                    <tr class="clickable" id="row-${n.id}" onclick="tableClick('${n.id}')">
+                        <td>
+                            <span class="rank">#${index + 1}</span>
+                            <span class="dot" style="background:${color}"></span>
+                            ${n.label}
+                        </td>
+                        <td><span class="count-badge">${n.degree}</span></td>
+                    </tr>
+                `;
+            });
+            tableBody.innerHTML = html;
+        }
+        initDegreeTable();
+
+        // --- 4. FILTERING & FOCUS LOGIC ---
+        function populateNodes() {
+            const type = document.getElementById('typeSelect').value;
+            const nodeSelect = document.getElementById('nodeSelect');
+            nodeSelect.innerHTML = '<option value="">-- Select node --</option>';
+            if (type === 'all') { nodeSelect.disabled = true; return; }
+            nodeSelect.disabled = false;
+            const filtered = rawNodes.filter(n => n.group === type).sort((a,b) => a.label.localeCompare(b.label));
+            filtered.forEach(n => {
+                const opt = document.createElement('option');
+                opt.value = n.id;
+                opt.innerText = n.title || n.label;
+                nodeSelect.appendChild(opt);
+            });
+        }
+
+        function applyFilter(targetId = null) {
+            const selectedId = targetId || document.getElementById('nodeSelect').value;
+            if (!selectedId) return alert("Please select a specific node first.");
+
+            // A. Update UI Controls (Dropdowns & Table)
+            const selectedNode = nodes.get(selectedId);
+            document.getElementById('typeSelect').value = selectedNode.group;
+            populateNodes();
+            document.getElementById('nodeSelect').value = selectedId;
+
+            // Highlight Table Row
+            document.querySelectorAll('tr').forEach(r => r.classList.remove('selected-row'));
+            const row = document.getElementById(`row-${selectedId}`);
+            if(row) row.classList.add('selected-row');
+            if(row) row.scrollIntoView({ behavior: 'smooth', block: 'center' }); // Auto-scroll table
+
+            // B. Filter Logic (Hybrid 1-Ego / 2-Ego)
+            const isCourse = (selectedNode.group === 'course');
+            let visibleSet = new Set();
+            visibleSet.add(selectedId);
+            const degree1 = network.getConnectedNodes(selectedId);
+            degree1.forEach(id => visibleSet.add(id));
+            if (!isCourse) {
+                degree1.forEach(id => {
+                    const degree2 = network.getConnectedNodes(id);
+                    degree2.forEach(id2 => visibleSet.add(id2));
+                });
+            }
+
+            // C. Visual Updates (Hide others + Scale Selected)
+            const nodesKeep = Array.from(visibleSet);
+            const updates = [];
+            nodes.forEach((node) => {
+                // If it's the selected node, make it BIGGER
+                if (node.id === selectedId) {
+                    updates.push({ id: node.id, hidden: false, size: 40, font: { size: 20, face: 'bold' } }); 
+                } else if (nodesKeep.includes(node.id)) {
+                    updates.push({ id: node.id, hidden: false, size: undefined, font: { size: 14 } }); // Reset others
+                } else {
+                    updates.push({ id: node.id, hidden: true });
+                }
+            });
+            nodes.update(updates);
+            document.getElementById('visibleCount').innerText = nodesKeep.length;
+
+            // D. SMART CAMERA FOCUS
+            // Instead of fitting everything, we FOCUS on the main node
+            // scale: 1.2 zooms in slightly, animation makes it smooth.
+            network.focus(selectedId, {
+                scale: 1.0,
+                animation: {
+                    duration: 1000,
+                    easingFunction: "easeInOutQuad"
+                }
+            });
+        }
+
+        function resetFilter() {
+            const updates = [];
+            nodes.forEach((node) => { 
+                // Reset all sizes and visibility
+                updates.push({ id: node.id, hidden: false, size: undefined, font: { size: 14 } }); 
+            });
+            nodes.update(updates);
+            
+            document.querySelectorAll('tr').forEach(r => r.classList.remove('selected-row'));
+            document.getElementById('typeSelect').value = 'all';
+            document.getElementById('nodeSelect').disabled = true;
+            document.getElementById('visibleCount').innerText = nodes.length;
+            
+            network.fit({ animation: true });
+        }
+
+        function tableClick(id) { applyFilter(id); }
+
+        network.on("click", function (params) {
+            if (params.nodes.length > 0) applyFilter(params.nodes[0]);
+        });
+    </script>
+</body>
+</html>

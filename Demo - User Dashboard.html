@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Progressive Graph Dashboard</title>
+    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <style>
+        body, html { height: 100%; margin: 0; padding: 0; font-family: 'Segoe UI', sans-serif; overflow: hidden; }
+        
+        #layout { display: flex; height: 100%; }
+
+        /* SIDEBAR */
+        #sidebar {
+            width: 300px;
+            background: #2c3e50;
+            color: white;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 2px 0 10px rgba(0,0,0,0.2);
+            z-index: 10;
+        }
+
+        h2 { margin-top: 0; font-size: 1.4rem; color: #ecf0f1; }
+        p { color: #bdc3c7; font-size: 0.9rem; margin-bottom: 20px; }
+
+        label { font-weight: bold; font-size: 0.85rem; color: #95a5a6; margin-top: 15px; display: block; }
+        
+        select { 
+            width: 100%; padding: 10px; margin-top: 5px; 
+            border: none; border-radius: 4px; background: #34495e; color: white; font-size: 1rem;
+        }
+        
+        button {
+            margin-top: 20px; padding: 10px; width: 100%;
+            background-color: #27ae60; color: white; font-weight: bold;
+            border: none; border-radius: 4px; cursor: pointer; transition: background 0.2s;
+        }
+        button:hover { background-color: #2ecc71; }
+
+        .info-box {
+            margin-top: auto;
+            background: #34495e;
+            padding: 15px;
+            border-radius: 6px;
+            border-left: 4px solid #f1c40f;
+        }
+
+        /* GRAPH AREA */
+        #mynetwork { flex-grow: 1; background-color: #ecf0f1; }
+    </style>
+</head>
+<body>
+
+<div id="layout">
+    <div id="sidebar">
+        <h2>🚀 User Dashboard</h2>
+        <p>Simulate a login to see the personalized graph view.</p>
+
+        <label>1. Select User Role:</label>
+        <select id="roleSelect" onchange="populateUsers()">
+            <option value="teacher">Teacher</option>
+            <option value="student">Student</option>
+        </select>
+
+        <label>2. Select User:</label>
+        <select id="userSelect"></select>
+
+        <button onclick="loadDashboard()">Log In & View Graph</button>
+
+        <div class="info-box" id="statusBox">
+            <strong>Status:</strong><br>
+            Please log in to start.
+        </div>
+    </div>
+
+    <div id="mynetwork"></div>
+</div>
+
+<script type="text/javascript">
+    // --- 1. THE "DATABASE" (Raw Data) ---
+    // We generate this once and query it later.
+    const DB_NODES = [];
+    const DB_EDGES = [];
+
+    // Generate Data
+    const teachers = ["Dr. Lovelace", "Prof. Turing", "Prof. Feynman", "Dr. Curie", "Prof. Newton", "Dr. Hopper"];
+    teachers.forEach((name, i) => {
+        DB_NODES.push({ id: `t${i}`, label: name, group: 'teacher', title: "Teacher" });
+    });
+
+    const courses = ["CS101", "CS202", "MATH101", "PHYS101", "CHEM101", "BIO101", "ECON101", "HIST101"];
+    courses.forEach((code, i) => {
+        DB_NODES.push({ id: `c${i}`, label: code, group: 'course', title: "Course" });
+        const teacherIndex = i % teachers.length; 
+        DB_EDGES.push({ from: `t${teacherIndex}`, to: `c${i}`, label: "TEACHES" });
+    });
+
+    for (let i = 1; i <= 100; i++) {
+        const sid = `s${i}`;
+        DB_NODES.push({ id: sid, label: `Student ${i}`, group: 'student', title: `Student ${i}` });
+        const numCourses = Math.floor(Math.random() * 2) + 2; 
+        const shuffled = [...Array(8).keys()].sort(() => 0.5 - Math.random()).slice(0, numCourses);
+        shuffled.forEach(cIndex => {
+            DB_EDGES.push({ from: sid, to: `c${cIndex}`, label: "ENROLLED" });
+        });
+    }
+
+    // --- 2. UI LOGIC ---
+    function populateUsers() {
+        const role = document.getElementById('roleSelect').value;
+        const select = document.getElementById('userSelect');
+        select.innerHTML = "";
+        
+        const filtered = DB_NODES.filter(n => n.group === role).sort((a,b) => a.label.localeCompare(b.label));
+        filtered.forEach(n => {
+            const opt = document.createElement('option');
+            opt.value = n.id;
+            opt.innerText = n.label;
+            select.appendChild(opt);
+        });
+    }
+
+    // Initialize dropdown on load
+    populateUsers();
+
+
+    // --- 3. GRAPH VISUALIZATION SETUP ---
+    // We start with EMPTY datasets. We will add nodes manually based on clicks.
+    const nodes = new vis.DataSet([]);
+    const edges = new vis.DataSet([]);
+    let network = null;
+    let currentUser = null; // Stores the logged-in user object
+
+    function initGraph() {
+        const container = document.getElementById('mynetwork');
+        const data = { nodes: nodes, edges: edges };
+        const options = {
+            nodes: { shape: 'dot', font: { size: 16 } },
+            groups: {
+                // Real Entities
+                teacher: { color: '#e74c3c', size: 30 }, // Red
+                student: { color: '#f1c40f', size: 20 }, // Yellow
+                course:  { color: '#3498db', size: 25 }, // Blue
+                
+                // High-Level Category Nodes (The "Folders")
+                category: { 
+                    shape: 'box', 
+                    color: { background:'#2c3e50', border:'#2c3e50' }, 
+                    font: { color:'white', size: 18 },
+                    margin: 10
+                }
+            },
+            physics: {
+                stabilization: false,
+                barnesHut: { gravitationalConstant: -3000, springLength: 150 }
+            },
+            interaction: { hover: true }
+        };
+        network = new vis.Network(container, data, options);
+
+        // CLICK HANDLER (The Core Logic)
+        network.on("click", function (params) {
+            if (params.nodes.length > 0) {
+                const clickedId = params.nodes[0];
+                handleNodeClick(clickedId);
+            }
+        });
+    }
+
+
+    // --- 4. THE BUSINESS LOGIC (EXPANSION) ---
+
+    function loadDashboard() {
+        const userId = document.getElementById('userSelect').value;
+        if (!userId) return;
+
+        currentUser = DB_NODES.find(n => n.id === userId);
+        
+        // Reset Graph
+        nodes.clear();
+        edges.clear();
+        
+        if (!network) initGraph();
+
+        // 1. Add the User Node (Center)
+        nodes.add({ ...currentUser, x: 0, y: 0, fixed: true }); // Fix center position initially
+
+        // 2. Add High-Level Nodes based on Role
+        if (currentUser.group === 'teacher') {
+            addCategoryNode('cat_courses', 'My Courses', userId);
+            addCategoryNode('cat_students', 'My Students', userId);
+            updateStatus(`Welcome <b>${currentUser.label}</b>.<br>Click "My Courses" to see what you teach.`);
+        } else {
+            addCategoryNode('cat_courses', 'My Courses', userId);
+            addCategoryNode('cat_teachers', 'My Teachers', userId);
+            updateStatus(`Welcome <b>${currentUser.label}</b>.<br>Click "My Courses" to see your classes.`);
+        }
+
+        // Release the fixed center after a moment so physics takes over
+        setTimeout(() => { nodes.update({ id: userId, fixed: false }); }, 1000);
+    }
+
+    function addCategoryNode(id, label, parentId) {
+        if (nodes.get(id)) return; // Already exists
+        nodes.add({ id: id, label: label, group: 'category' });
+        edges.add({ from: parentId, to: id, dashes: true, color: '#bdc3c7' });
+    }
+
+    // Handles the "Drill Down" logic
+    function handleNodeClick(nodeId) {
+        const node = nodes.get(nodeId);
+        
+        // CASE A: Clicked "My Courses" Category
+        if (nodeId === 'cat_courses') {
+            expandCourses(currentUser.id);
+        }
+        
+        // CASE B: Clicked "My Students" Category (Teacher View)
+        else if (nodeId === 'cat_students') {
+            expandAllStudents(currentUser.id);
+        }
+
+        // CASE C: Clicked "My Teachers" Category (Student View)
+        else if (nodeId === 'cat_teachers') {
+            expandAllTeachers(currentUser.id);
+        }
+
+        // CASE D: Clicked a Specific Course (The Drill Down!)
+        else if (node.group === 'course') {
+            if (currentUser.group === 'teacher') {
+                // If I am a teacher, clicking a course shows STUDENTS in it
+                expandCourseStudents(nodeId);
+            } else {
+                // If I am a student, clicking a course shows the TEACHER
+                expandCourseTeacher(nodeId);
+            }
+        }
+    }
+
+    // --- EXPANSION HELPER FUNCTIONS ---
+
+    function expandCourses(userId) {
+        // Find courses connected to this user in DB
+        const connectedEdges = DB_EDGES.filter(e => e.from === userId || e.to === userId);
+        let count = 0;
+
+        connectedEdges.forEach(edge => {
+            // Determine which ID is the course (could be 'from' or 'to')
+            const targetId = (edge.from === userId) ? edge.to : edge.from;
+            const courseNode = DB_NODES.find(n => n.id === targetId && n.group === 'course');
+            
+            if (courseNode && !nodes.get(courseNode.id)) {
+                nodes.add(courseNode);
+                edges.add({ from: 'cat_courses', to: courseNode.id }); // Connect to Category
+                count++;
+            }
+        });
+        updateStatus(`Expanded <b>${count} courses</b>.`);
+    }
+
+    function expandCourseStudents(courseId) {
+        // Find students enrolled in this course
+        const enrollments = DB_EDGES.filter(e => e.to === courseId && e.label === "ENROLLED");
+        let count = 0;
+
+        enrollments.forEach(edge => {
+            const studentNode = DB_NODES.find(n => n.id === edge.from);
+            if (studentNode && !nodes.get(studentNode.id)) {
+                nodes.add(studentNode);
+                edges.add({ from: courseId, to: studentNode.id }); // Connect to Course
+                count++;
+            }
+        });
+
+        const courseName = nodes.get(courseId).label;
+        if(count === 0) updateStatus(`No new students found for ${courseName} (or already visible).`);
+        else updateStatus(`Shown <b>${count} students</b> for ${courseName}.`);
+    }
+
+    function expandCourseTeacher(courseId) {
+        // Find who teaches this course
+        const teachingEdge = DB_EDGES.find(e => e.to === courseId && e.label === "TEACHES");
+        if (teachingEdge) {
+            const teacherNode = DB_NODES.find(n => n.id === teachingEdge.from);
+            if (teacherNode && !nodes.get(teacherNode.id)) {
+                nodes.add(teacherNode);
+                edges.add({ from: courseId, to: teacherNode.id });
+                updateStatus(`Instructor: <b>${teacherNode.label}</b>`);
+            }
+        }
+    }
+
+    function expandAllStudents(teacherId) {
+        // Advanced: Find all students across all courses this teacher teaches
+        // 1. Find teacher's courses
+        const myCourses = DB_EDGES.filter(e => e.from === teacherId).map(e => e.to);
+        // 2. Find students in those courses
+        let count = 0;
+        myCourses.forEach(cId => {
+            const enrollments = DB_EDGES.filter(e => e.to === cId && e.label === "ENROLLED");
+            enrollments.forEach(enr => {
+                const sNode = DB_NODES.find(n => n.id === enr.from);
+                if (sNode && !nodes.get(sNode.id)) {
+                    nodes.add(sNode);
+                    edges.add({ from: 'cat_students', to: sNode.id });
+                    count++;
+                }
+            });
+        });
+        updateStatus(`Found <b>${count} unique students</b> across all your classes.`);
+    }
+
+    function expandAllTeachers(studentId) {
+        // Find all teachers for this student
+        // 1. Find student's courses
+        const myCourses = DB_EDGES.filter(e => e.from === studentId).map(e => e.to);
+        // 2. Find teachers of those courses
+        let count = 0;
+        myCourses.forEach(cId => {
+            const teachEdge = DB_EDGES.find(e => e.to === cId && e.label === "TEACHES");
+            if (teachEdge) {
+                const tNode = DB_NODES.find(n => n.id === teachEdge.from);
+                if (tNode && !nodes.get(tNode.id)) {
+                    nodes.add(tNode);
+                    edges.add({ from: 'cat_teachers', to: tNode.id });
+                    count++;
+                }
+            }
+        });
+        updateStatus(`Found <b>${count} instructors</b>.`);
+    }
+
+    function updateStatus(html) {
+        document.getElementById('statusBox').innerHTML = html;
+    }
+
+</script>
+
+</body>
+</html>
