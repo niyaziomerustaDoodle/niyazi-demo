@@ -199,7 +199,7 @@
             filtered.forEach(n => {
                 const opt = document.createElement('option');
                 opt.value = n.id;
-                opt.innerText = n.title || n.label;
+                opt.innerText = n.label;
                 nodeSelect.appendChild(opt);
             });
         }
